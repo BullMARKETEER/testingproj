@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2D Rocket League - Step 7</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0f172a;
+      font-family: Arial, sans-serif;
+    }
+
+    canvas {
+      border: 2px solid #94a3b8;
+      background: #0b4f2f;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="800" height="500"></canvas>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const context = canvas.getContext('2d');
+
+    const gameState = {
+      width: canvas.width,
+      height: canvas.height,
+      keys: {},
+      goalHeight: 180,
+      score: {
+        leftPlayer: 0,
+        rightPlayer: 0,
+      },
+    };
+
+    class Player {
+      constructor({ x, y, color, controls }) {
+        this.startX = x;
+        this.startY = y;
+
+        this.x = x;
+        this.y = y;
+        this.width = 36;
+        this.height = 22;
+        this.color = color;
+        this.controls = controls;
+
+        this.velocityX = 0;
+        this.velocityY = 0;
+        this.acceleration = 0.42;
+        this.maxSpeed = 4.8;
+        this.friction = 0.92;
+
+        this.boost = 100;
+        this.maxBoost = 100;
+        this.boostDrain = 1.2;
+        this.boostRegen = 0.48;
+        this.boostAccelerationMultiplier = 1.85;
+        this.boostMaxSpeedMultiplier = 1.42;
+      }
+
+      reset() {
+        this.x = this.startX;
+        this.y = this.startY;
+        this.velocityX = 0;
+        this.velocityY = 0;
+        this.boost = this.maxBoost;
+      }
+
+      update(keys, bounds) {
+        const boosting = Boolean(keys[this.controls.boost]) && this.boost > 0;
+        const activeAcceleration = boosting
+          ? this.acceleration * this.boostAccelerationMultiplier
+          : this.acceleration;
+        const activeMaxSpeed = boosting
+          ? this.maxSpeed * this.boostMaxSpeedMultiplier
+          : this.maxSpeed;
+
+        if (keys[this.controls.up]) this.velocityY -= activeAcceleration;
+        if (keys[this.controls.down]) this.velocityY += activeAcceleration;
+        if (keys[this.controls.left]) this.velocityX -= activeAcceleration;
+        if (keys[this.controls.right]) this.velocityX += activeAcceleration;
+
+        this.velocityX = Math.max(-activeMaxSpeed, Math.min(activeMaxSpeed, this.velocityX));
+        this.velocityY = Math.max(-activeMaxSpeed, Math.min(activeMaxSpeed, this.velocityY));
+
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        this.velocityX *= this.friction;
+        this.velocityY *= this.friction;
+
+        if (boosting) {
+          this.boost = Math.max(0, this.boost - this.boostDrain);
+        } else {
+          this.boost = Math.min(this.maxBoost, this.boost + this.boostRegen);
+        }
+
+        if (this.x < 0) {
+          this.x = 0;
+          this.velocityX = 0;
+        }
+        if (this.x + this.width > bounds.width) {
+          this.x = bounds.width - this.width;
+          this.velocityX = 0;
+        }
+        if (this.y < 0) {
+          this.y = 0;
+          this.velocityY = 0;
+        }
+        if (this.y + this.height > bounds.height) {
+          this.y = bounds.height - this.height;
+          this.velocityY = 0;
+        }
+      }
+
+      draw(ctx) {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+      }
+    }
+
+    class Ball {
+      constructor({ x, y, radius, color }) {
+        this.x = x;
+        this.y = y;
+        this.radius = radius;
+        this.color = color;
+
+        this.velocityX = 3.2;
+        this.velocityY = 2.1;
+        this.friction = 0.9975;
+        this.minSpeed = 1.35;
+        this.maxSpeed = 9;
+      }
+
+      resetToCenter(bounds, launchDirection = 1) {
+        this.x = bounds.width / 2;
+        this.y = bounds.height / 2;
+
+        const startSpeed = 3.6;
+        const randomVertical = (Math.random() * 2 - 1) * 1.4;
+        this.velocityX = startSpeed * launchDirection;
+        this.velocityY = randomVertical;
+      }
+
+      update(bounds) {
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        const goalTop = (bounds.height - bounds.goalHeight) / 2;
+        const goalBottom = goalTop + bounds.goalHeight;
+        const insideGoalY = this.y > goalTop && this.y < goalBottom;
+
+        if (this.y - this.radius <= 0) {
+          this.y = this.radius;
+          this.velocityY = Math.abs(this.velocityY) * 0.98;
+        }
+        if (this.y + this.radius >= bounds.height) {
+          this.y = bounds.height - this.radius;
+          this.velocityY = -Math.abs(this.velocityY) * 0.98;
+        }
+
+        if (!insideGoalY && this.x - this.radius <= 0) {
+          this.x = this.radius;
+          this.velocityX = Math.abs(this.velocityX) * 0.985;
+        }
+        if (!insideGoalY && this.x + this.radius >= bounds.width) {
+          this.x = bounds.width - this.radius;
+          this.velocityX = -Math.abs(this.velocityX) * 0.985;
+        }
+
+        this.velocityX *= this.friction;
+        this.velocityY *= this.friction;
+
+        const speed = Math.hypot(this.velocityX, this.velocityY);
+        if (speed < this.minSpeed) {
+          const angle = Math.atan2(this.velocityY, this.velocityX);
+          this.velocityX = Math.cos(angle) * this.minSpeed;
+          this.velocityY = Math.sin(angle) * this.minSpeed;
+        }
+
+        if (speed > this.maxSpeed) {
+          const angle = Math.atan2(this.velocityY, this.velocityX);
+          this.velocityX = Math.cos(angle) * this.maxSpeed;
+          this.velocityY = Math.sin(angle) * this.maxSpeed;
+        }
+      }
+
+      draw(ctx) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+      }
+    }
+
+    const players = [
+      new Player({
+        x: 120,
+        y: gameState.height / 2 - 11,
+        color: '#60a5fa',
+        controls: {
+          up: 'KeyW',
+          down: 'KeyS',
+          left: 'KeyA',
+          right: 'KeyD',
+          boost: 'ShiftLeft',
+        },
+      }),
+      new Player({
+        x: gameState.width - 156,
+        y: gameState.height / 2 - 11,
+        color: '#f87171',
+        controls: {
+          up: 'ArrowUp',
+          down: 'ArrowDown',
+          left: 'ArrowLeft',
+          right: 'ArrowRight',
+          boost: 'ShiftRight',
+        },
+      }),
+    ];
+
+    const ball = new Ball({
+      x: gameState.width / 2,
+      y: gameState.height / 2,
+      radius: 12,
+      color: '#f8fafc',
+    });
+
+    function restartMatch() {
+      gameState.score.leftPlayer = 0;
+      gameState.score.rightPlayer = 0;
+      for (const player of players) {
+        player.reset();
+      }
+      ball.resetToCenter(gameState, Math.random() < 0.5 ? -1 : 1);
+    }
+
+    function drawBoostMeter(player, x, y, width, height) {
+      const ratio = player.boost / player.maxBoost;
+      context.fillStyle = 'rgba(15, 23, 42, 0.65)';
+      context.fillRect(x, y, width, height);
+
+      context.fillStyle = ratio > 0.35 ? '#22c55e' : '#f59e0b';
+      context.fillRect(x, y, width * ratio, height);
+
+      context.strokeStyle = '#e2e8f0';
+      context.lineWidth = 2;
+      context.strokeRect(x, y, width, height);
+    }
+
+    function drawField() {
+      context.fillStyle = '#146c43';
+      context.fillRect(0, 0, gameState.width, gameState.height);
+
+      context.lineWidth = 4;
+      context.strokeStyle = '#e2e8f0';
+      context.strokeRect(2, 2, gameState.width - 4, gameState.height - 4);
+
+      // Step 7 polish: center line and center circle.
+      context.strokeStyle = 'rgba(248, 250, 252, 0.75)';
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(gameState.width / 2, 0);
+      context.lineTo(gameState.width / 2, gameState.height);
+      context.stroke();
+
+      context.beginPath();
+      context.arc(gameState.width / 2, gameState.height / 2, 62, 0, Math.PI * 2);
+      context.stroke();
+
+      const goalTop = (gameState.height - gameState.goalHeight) / 2;
+      const goalBottom = goalTop + gameState.goalHeight;
+
+      context.strokeStyle = '#f8fafc';
+      context.lineWidth = 5;
+      context.beginPath();
+      context.moveTo(0, goalTop);
+      context.lineTo(0, goalBottom);
+      context.moveTo(gameState.width, goalTop);
+      context.lineTo(gameState.width, goalBottom);
+      context.stroke();
+
+      // Step 7 polish: improved score UI and hint text.
+      context.textAlign = 'center';
+      context.fillStyle = '#f8fafc';
+      context.font = 'bold 30px Arial';
+      context.fillText(`${gameState.score.leftPlayer}  :  ${gameState.score.rightPlayer}`, gameState.width / 2, 38);
+
+      context.font = '13px Arial';
+      context.fillStyle = 'rgba(248, 250, 252, 0.9)';
+      context.fillText('R = Restart Match', gameState.width / 2, gameState.height - 14);
+
+      drawBoostMeter(players[0], 24, 20, 140, 14);
+      drawBoostMeter(players[1], gameState.width - 164, 20, 140, 14);
+    }
+
+    function resolvePlayerBallCollision(player, ballObject) {
+      const closestX = Math.max(player.x, Math.min(ballObject.x, player.x + player.width));
+      const closestY = Math.max(player.y, Math.min(ballObject.y, player.y + player.height));
+
+      const deltaX = ballObject.x - closestX;
+      const deltaY = ballObject.y - closestY;
+      const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+
+      if (distanceSquared > ballObject.radius * ballObject.radius) {
+        return;
+      }
+
+      const distance = Math.sqrt(distanceSquared) || 0.0001;
+      let normalX = deltaX / distance;
+      let normalY = deltaY / distance;
+
+      if (!Number.isFinite(normalX) || !Number.isFinite(normalY)) {
+        normalX = 1;
+        normalY = 0;
+      }
+
+      const overlap = ballObject.radius - distance;
+      ballObject.x += normalX * overlap;
+      ballObject.y += normalY * overlap;
+
+      const relativeVelocityX = ballObject.velocityX - player.velocityX;
+      const relativeVelocityY = ballObject.velocityY - player.velocityY;
+      const velocityAlongNormal = relativeVelocityX * normalX + relativeVelocityY * normalY;
+
+      if (velocityAlongNormal < 0) {
+        const restitution = 1.1;
+        const baseImpulse = -(1 + restitution) * velocityAlongNormal;
+        const randomFactor = 1 + (Math.random() * 0.14 - 0.07);
+        const impulse = baseImpulse * randomFactor;
+
+        ballObject.velocityX += normalX * impulse + (Math.random() - 0.5) * 0.14;
+        ballObject.velocityY += normalY * impulse + (Math.random() - 0.5) * 0.14;
+      }
+    }
+
+    function handleGoalIfScored() {
+      const goalTop = (gameState.height - gameState.goalHeight) / 2;
+      const goalBottom = goalTop + gameState.goalHeight;
+      const insideGoalY = ball.y > goalTop && ball.y < goalBottom;
+
+      if (!insideGoalY) {
+        return;
+      }
+
+      if (ball.x + ball.radius < 0) {
+        gameState.score.rightPlayer += 1;
+        ball.resetToCenter(gameState, -1);
+      } else if (ball.x - ball.radius > gameState.width) {
+        gameState.score.leftPlayer += 1;
+        ball.resetToCenter(gameState, 1);
+      }
+    }
+
+    function update() {
+      for (const player of players) {
+        player.update(gameState.keys, gameState);
+      }
+
+      ball.update(gameState);
+
+      for (const player of players) {
+        resolvePlayerBallCollision(player, ball);
+      }
+
+      handleGoalIfScored();
+    }
+
+    function render() {
+      drawField();
+
+      for (const player of players) {
+        player.draw(context);
+      }
+
+      ball.draw(context);
+    }
+
+    function gameLoop() {
+      update();
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    window.addEventListener('keydown', (event) => {
+      gameState.keys[event.code] = true;
+
+      if (event.code === 'KeyR') {
+        restartMatch();
+      }
+    });
+
+    window.addEventListener('keyup', (event) => {
+      gameState.keys[event.code] = false;
+    });
+
+    ball.resetToCenter(gameState, Math.random() < 0.5 ? -1 : 1);
+    gameLoop();
+  </script>
+</body>
+</html>
